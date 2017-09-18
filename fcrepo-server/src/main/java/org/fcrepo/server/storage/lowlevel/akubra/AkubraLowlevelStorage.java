@@ -320,6 +320,38 @@ public class AkubraLowlevelStorage
     }
 
     /**
+     * Sleeps and retries if a blob's existence is not in the expected state.
+     */
+    private static void waitForConsistency(Blob blob, boolean expectedState) {
+        logger.info("Checking for state " + (expectedState ? "true" : "false") + " in blob: " + blob.getId());
+        int sleepRetries = 3;
+        int sleepDuration = 4000;
+
+        for (int i = 0; i < sleepRetries; i++) {
+            try {
+                if (exists(blob) == expectedState) {
+                    return;
+                }
+                logger.error("Unexpected state for blob; waiting...");
+                Thread.sleep(sleepDuration);
+            } catch (Throwable e) {
+                logger.error("Exception thrown during eventual consistency check: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Sleeps and retries if a blob's existence is not in the expected state.
+     */
+    private static void waitForConsistency(BlobStoreConnection connection, String id, boolean expectedState) {
+        try {
+            waitForConsistency(connection.getBlob(new URI(id), null), expectedState);
+        } catch (Throwable e) {
+            logger.error("Unexpected exception during eventual consistency check: " + e.getMessage());
+        }
+    }
+
+    /**
      * Overwrites the content of the given blob in a way that guarantees the
      * original content is not destroyed until the replacement is successfully
      * put in its place.
@@ -333,6 +365,7 @@ public class AkubraLowlevelStorage
         try {
             newBlob = connection.getBlob(new URI(origId + "/new"), null);
             copy(content, newBlob.openOutputStream(-1, false));
+            waitForConsistency(newBlob, true);
         } catch (Throwable th) {
             // any error or exception here is an unrecoverable fault
             throw new FaultException(th);
@@ -344,11 +377,14 @@ public class AkubraLowlevelStorage
         Blob oldBlob = null;
         try {
             oldBlob = rename(origBlob, origId + "/old");
+            waitForConsistency(origBlob, false);
+            waitForConsistency(connection, origId + "/old", true);
         } finally {
             if (oldBlob == null) {
                 // rename failed; attempt recovery before throwing the fault
                 try {
                     delete(newBlob);
+                    waitForConsistency(newBlob, false);
                 } catch (Throwable th) {
                     logger.error("Failed to delete " + newBlob.getId() + " while"
                               + " recovering from rename failure during safe"
@@ -363,12 +399,16 @@ public class AkubraLowlevelStorage
         boolean successful = false;
         try {
             rename(newBlob, origId);
+            waitForConsistency(newBlob, false);
+            waitForConsistency(connection, origId, true);
             successful = true;
         } finally {
             if (!successful) {
                 // rename failed; attempt recovery before throwing the fault
                 try {
                     rename(oldBlob, origId);
+                    waitForConsistency(oldBlob, false);
+                    waitForConsistency(connection, origId, true);
                 } catch (Throwable th) {
                     logger.error("Failed to rename " + oldBlob.getId() + " to "
                               + origId + " while recovering from rename"
@@ -376,6 +416,7 @@ public class AkubraLowlevelStorage
                 }
                 try {
                     newBlob.delete();
+                    waitForConsistency(newBlob, false);
                 } catch (Throwable th) {
                     logger.error("Failed to delete " + newBlob.getId()
                               + " while recovering from rename"
@@ -389,6 +430,7 @@ public class AkubraLowlevelStorage
         // remove origId/old; we don't need it anymore
         try {
             delete(oldBlob);
+            waitForConsistency(oldBlob, false);
         } catch (Throwable th) {
             logger.error("Failed to delete " + oldBlob.getId()
                     + " while cleaning up after committed"
