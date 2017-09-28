@@ -322,7 +322,7 @@ public class AkubraLowlevelStorage
     /**
      * Sleeps and retries if a blob's existence is not in the expected state.
      */
-    private static void waitForConsistency(Blob blob, boolean expectedState) {
+    private static void waitForConsistency(Blob blob, boolean expectedState) throws FaultException {
         logger.info("Checking for state " + (expectedState ? "true" : "false") + " in blob: " + blob.getId());
         int sleepRetries = 3;
         int sleepDuration = 4000;
@@ -338,16 +338,21 @@ public class AkubraLowlevelStorage
                 logger.error("Exception thrown during eventual consistency check: " + e.getMessage());
             }
         }
+
+        logger.info("Ran out of retries for blob: " + blob.getId());
+        throw new FaultException("Ran out of retries for blob: " + blob.getId());
     }
 
     /**
      * Sleeps and retries if a blob's existence is not in the expected state.
      */
-    private static void waitForConsistency(BlobStoreConnection connection, String id, boolean expectedState) {
-        try {
+    private static void waitForConsistency(BlobStoreConnection connection, String id, boolean expectedState) throws FaultException {
+        try  {
             waitForConsistency(connection.getBlob(new URI(id), null), expectedState);
-        } catch (Throwable e) {
-            logger.error("Unexpected exception during eventual consistency check: " + e.getMessage());
+        } catch (java.net.URISyntaxException e) {
+            logger.info("Unexpected java.net.URISyntaxException during waitForConsistency");
+        } catch (java.io.IOException e) {
+            logger.info("Unexpected java.io.IOException during waitForConsistency");
         }
     }
 
